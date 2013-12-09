@@ -1,0 +1,54 @@
+SUID: khaled
+
+Implementation Description:
+If (packet has invalid length)
+  drop it
+If (packet is IP)
+ if (ip header checksum matches)
+    if (packet if for me)
+      if (packet is ICMP ECHO request)
+        send ECHO reply
+      else if (packet is UDP or TCP)
+        end PORT UNREACHABLE
+      else 
+        drop packet
+    else  
+      if (found match in routing table using LPM)
+        if (found match in ARP cache)
+	  forward packet to next hop
+	else 
+	  queue packet until ARP response comes.
+      else 
+	send DESTINATION NET UNREACHABLE
+  else 
+    drop packet.
+   
+else if (packet is ARP)
+  if (packet is for me && it's an ARP request)
+    send ARP reply
+  else if (packet is for me && it's an ARP reply)
+    insert reply in ARP cache
+    if (there are outstanding packets)
+      send them
+  else 
+    drop packet
+else
+  drop packet.
+
+Note: handle packet behaves exactly like the pseudocode in sr_arpcache.h
+
+Testing:
+Tested traceroutes from one of the HTTP servers to any of my routers interfaces --> ICMP port unreachable seems to work.
+Tested traceroutes from one server to another --> TTL Time Exceeded and Port Unreachable work.
+Tested using a get request from a web brwoser to one of the servers --> ARP caching works. 
+Tested by modifying the mask for eth3 to be 255.255.255.255 and performing a GET request fro mthe browser to one of the 
+servers. --> Router correctly generated Destination Net Unreachable.
+Tested by sending ARP requests through the wrong interface --> Destination Host Unreachable seems to work.
+
+Challenging part:
+Most challenging part was keeping track of the interface that the packet should be sent through
+in different scenarios and maintaining the interface somewhere in memory. 
+
+Bugs:
+I think my code meets the assignment requirements.
+
