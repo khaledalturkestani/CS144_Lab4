@@ -40,11 +40,13 @@ void make_icmp_packet(uint8_t * rcvd_packet, uint8_t * packet, struct sr_if* ifa
 void send_arp_reply(struct sr_instance* sr, uint8_t* packet, struct sr_if* if_match, char* interface);
 void handle_nat_ip_packet(struct sr_instance* sr, uint8_t * packet, unsigned int len, char* interface);
 void handle_ip_pkt_for_router(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* interface, struct sr_if* if_match);
+void forward_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* interface);
 uint16_t tcp_cksum(sr_tcp_hdr_t* tcp_hdr, sr_ip_hdr_t* ip_hdr);
 uint16_t icmp_cksum(sr_icmp_hdr_t* icmp_hdr, sr_ip_hdr_t* ip_hdr);
 
 /* Globals: */
 uint16_t global_ip_id = 0x0000;
+char* internal_iface = "eth1";
 
 /*---------------------------------------------------------------------
  * Method: sr_init(void)
@@ -92,30 +94,6 @@ void sr_init(struct sr_instance* sr)
  * the method call.
  *
  *---------------------------------------------------------------------*/
-
-void
-handle_arp_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* interface)
-{
-  sr_arp_hdr_t* arp_hdr = (uint8_t*)packet+sizeof(sr_ethernet_hdr_t);	
-  enum sr_arp_opcode opcode = arp_hdr->ar_op;
-  struct sr_if* if_match = NULL;
-  /* Packet is for me & is an ARP request --> reply. */
-  if (ntohs(opcode) == arp_op_request && packet_is_for_me(arp_hdr->ar_tip, sr, &if_match)) {
-    send_arp_reply(sr, packet, if_match, interface);
-  } else if (ntohs(opcode) == arp_op_reply && packet_is_for_me(arp_hdr->ar_tip, sr, &if_match)) {
-    /* Packet is for me & is an ARP reply --> cache it & send outstanding packets, if any. */	
-    struct sr_arpreq* arpreq = sr_arpcache_insert(&(sr->cache), arp_hdr->ar_sha, arp_hdr->ar_sip);
-    if (arpreq != NULL) { /* Send packets waiting on this ARP reply. */
-      send_outstanding_packets(sr, arpreq->packets, arp_hdr->ar_sha);
-      sr_arpreq_destroy(&(sr->cache), arpreq);
-    } else { /* No pending requests for this ARP reply --> return. */
-      return;
-    }
-  } else { /* ARP packet but not a request or a reply --> drop it. */
-    return;
-  } 
-}
-
 void sr_handlepacket(struct sr_instance* sr,
         uint8_t * packet/* lent */,
         unsigned int len,
@@ -170,44 +148,77 @@ void sr_handlepacket(struct sr_instance* sr,
       handle_ip_pkt_for_router(sr, packet, len, interface, if_match);
       return;
     } else { /* Packet is IP but not for me --> forward packet. */
-      if (ip_hdr->ip_ttl == 0x01) { /* TTL expired --> drop packet & send ICMP net unreachable. */ 
-	icmp_packet_len = sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_icmp_t3_hdr_t);
-	uint8_t icmp_packet[icmp_packet_len];
-	response = TIME_EXCEEDED;
-	make_icmp_packet(packet, icmp_packet, iface, response);
-	sr_send_packet(sr, icmp_packet, icmp_packet_len, interface);  
-	return;
-      } else { /* Forward to next hop. */
-	/* Recompute IP header checksum. */
-	ip_hdr->ip_ttl--;
-	ip_hdr->ip_sum = 0x0000;
-	ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
-
-	struct sr_rt* rt_match = NULL;
-	if (lpm_found_match(ip_hdr->ip_dst, sr, &rt_match)) { /* Found a match in the routing table to forward packet. */
-	  struct sr_arpentry* cache_entry = sr_arpcache_lookup(&(sr->cache), rt_match->gw.s_addr);
-	  if (cache_entry != NULL) { /* Found a match in the ARP cache to forward packet. */
-	    sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)packet;
-	    struct sr_if* if_match = sr_get_interface(sr, rt_match->interface);
-	    memcpy(eth_hdr->ether_dhost, cache_entry->mac, ETHER_ADDR_LEN);
-	    memcpy(eth_hdr->ether_shost, if_match->addr, ETHER_ADDR_LEN);
-	    sr_send_packet(sr, packet, len, rt_match->interface);
-	    free(cache_entry);
-	  } else { /* No match in ARP cache --> queue packet. */
-	    sr_arpcache_queuereq(&(sr->cache), rt_match->gw.s_addr, packet, len, rt_match->interface, interface);
-	  }
-	} else { /* No match in routing table --> send ICMP net unreachable. */
-	  printf("------------------- NOT MATCH IN ROUTING TABLE -------------------\n");
-	  icmp_packet_len = sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_icmp_t3_hdr_t);
-          uint8_t icmp_packet[icmp_packet_len];
-          response = DESTINATION_NET_UNREACHABLE;
-          make_icmp_packet(packet, icmp_packet, iface, response);
-          sr_send_packet(sr, icmp_packet, icmp_packet_len, interface);
-	}
-      }
+      forward_packet(sr, packet, len, interface);  
     }
   }     
 } /* end of sr_handlepacket() */
+
+void
+forward_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* interface)
+{
+  struct sr_if* iface = sr_get_interface(sr, interface);
+  unsigned int icmp_packet_len;
+  enum icmp_responses response;
+  sr_ip_hdr_t* ip_hdr = packet + sizeof(sr_ethernet_hdr_t);
+  if (ip_hdr->ip_ttl == 0x01) { /* TTL expired --> drop packet & send ICMP net unreachable. */ 
+    icmp_packet_len = sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_icmp_t3_hdr_t);
+    uint8_t icmp_packet[icmp_packet_len];
+    response = TIME_EXCEEDED;
+    make_icmp_packet(packet, icmp_packet, iface, response);
+    sr_send_packet(sr, icmp_packet, icmp_packet_len, interface);  
+    return;
+  } else { /* Forward to next hop. */
+    /* Recompute IP header checksum. */
+    ip_hdr->ip_ttl--;
+    ip_hdr->ip_sum = 0x0000;
+    ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
+
+    struct sr_rt* rt_match = NULL;
+    if (lpm_found_match(ip_hdr->ip_dst, sr, &rt_match)) { /* Found a match in the routing table to forward packet. */
+      struct sr_arpentry* cache_entry = sr_arpcache_lookup(&(sr->cache), rt_match->gw.s_addr);
+      if (cache_entry != NULL) { /* Found a match in the ARP cache to forward packet. */
+        sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)packet;
+        struct sr_if* if_match = sr_get_interface(sr, rt_match->interface);
+        memcpy(eth_hdr->ether_dhost, cache_entry->mac, ETHER_ADDR_LEN);
+        memcpy(eth_hdr->ether_shost, if_match->addr, ETHER_ADDR_LEN);
+        sr_send_packet(sr, packet, len, rt_match->interface);
+        free(cache_entry);
+      } else { /* No match in ARP cache --> queue packet. */
+        sr_arpcache_queuereq(&(sr->cache), rt_match->gw.s_addr, packet, len, rt_match->interface, interface);
+      }
+    } else { /* No match in routing table --> send ICMP net unreachable. */
+      printf("------------------- NOT MATCH IN ROUTING TABLE -------------------\n");
+      icmp_packet_len = sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_icmp_t3_hdr_t);
+      uint8_t icmp_packet[icmp_packet_len];
+      response = DESTINATION_NET_UNREACHABLE;
+      make_icmp_packet(packet, icmp_packet, iface, response);
+      sr_send_packet(sr, icmp_packet, icmp_packet_len, interface);
+    }
+  }
+}
+
+void
+handle_arp_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* interface)
+{
+  sr_arp_hdr_t* arp_hdr = (uint8_t*)packet+sizeof(sr_ethernet_hdr_t);	
+  enum sr_arp_opcode opcode = arp_hdr->ar_op;
+  struct sr_if* if_match = NULL;
+  /* Packet is for me & is an ARP request --> reply. */
+  if (ntohs(opcode) == arp_op_request && packet_is_for_me(arp_hdr->ar_tip, sr, &if_match)) {
+    send_arp_reply(sr, packet, if_match, interface);
+  } else if (ntohs(opcode) == arp_op_reply && packet_is_for_me(arp_hdr->ar_tip, sr, &if_match)) {
+    /* Packet is for me & is an ARP reply --> cache it & send outstanding packets, if any. */	
+    struct sr_arpreq* arpreq = sr_arpcache_insert(&(sr->cache), arp_hdr->ar_sha, arp_hdr->ar_sip);
+    if (arpreq != NULL) { /* Send packets waiting on this ARP reply. */
+      send_outstanding_packets(sr, arpreq->packets, arp_hdr->ar_sha);
+      sr_arpreq_destroy(&(sr->cache), arpreq);
+    } else { /* No pending requests for this ARP reply --> return. */
+      return;
+    }
+  } else { /* ARP packet but not a request or a reply --> drop it. */
+    return;
+  } 
+}
 
 /* Handles the router's response when an IP packet's final destination is the router (or NAT). */
 void
@@ -240,11 +251,10 @@ handle_ip_pkt_for_router(struct sr_instance* sr, uint8_t* packet, unsigned int l
   } else { /* Packet is for me but not an echo request or a UDP/TCP packet --> drop packet. */
     return;
   }
-
 }
 
 /* Returns true if an external (IP, port) or (IP, icmp id) pair have a mapping to an internal address. 
-   Saves a pointer to the corresponding sr_nat_mapping struct in "match". */
+   Saves a pointer to the corresponding sr_nat_mapping struct in "match". MUST FREE match. */
 bool
 external_mapping_exists(struct sr_instance* sr, uint8_t* packet, struct sr_nat_mapping** match) {
   
@@ -253,7 +263,6 @@ external_mapping_exists(struct sr_instance* sr, uint8_t* packet, struct sr_nat_m
   uint32_t pkt_ip = ntohl(ip_hdr->ip_dst);
   uint32_t pkt_aux;
   sr_nat_mapping_type mapping_type;
-
   
   if (ip_hdr->ip_p == IP_PROTOCOL_ICMP){
     sr_icmp_hdr_t* icmp_hdr = (sr_icmp_hdr_t*)((uint8_t*)ip_hdr + sizeof(sr_ip_hdr_t));
@@ -279,7 +288,7 @@ external_mapping_exists(struct sr_instance* sr, uint8_t* packet, struct sr_nat_m
 }
 
 /* Returns true if an internal (IP, port) or (IP, icmp id) pair have a mapping to an external address. 
-   Saves a pointer to the corresponding sr_nat_mapping struct in "match". */
+   Saves a pointer to the corresponding sr_nat_mapping struct in "match". MUST FREE match*/
 bool
 internal_mapping_exists(struct sr_instance* sr, uint8_t* packet, struct sr_nat_mapping** match) {
   
@@ -288,7 +297,6 @@ internal_mapping_exists(struct sr_instance* sr, uint8_t* packet, struct sr_nat_m
   uint32_t pkt_ip = ntohl(ip_hdr->ip_src);
   uint32_t pkt_aux;
   sr_nat_mapping_type mapping_type;
-
   
   if (ip_hdr->ip_p == IP_PROTOCOL_ICMP){
     sr_icmp_hdr_t* icmp_hdr = (sr_icmp_hdr_t*)((uint8_t*)ip_hdr + sizeof(sr_ip_hdr_t));
@@ -326,11 +334,6 @@ handle_nat_ip_packet (struct sr_instance* sr,
   unsigned int eth_hdr_len = sizeof(sr_ethernet_hdr_t);
   sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(packet+eth_hdr_len);
   
-  /* Drop packet if it's not ICMP of TCP. */
-  if (ip_hdr->ip_p != IP_PROTOCOL_ICMP && ip_hdr->ip_p != IP_PROTOCOL_TCP) {
-    return;
-  }
-
   /* Case: packet's destination IP is one of the router's. */ 
   struct sr_if* incoming_iface = NULL; 
   if (packet_is_for_me(ip_hdr->ip_dst, sr, &incoming_iface)) {
@@ -343,7 +346,11 @@ handle_nat_ip_packet (struct sr_instance* sr,
     }
 
     /* Case: found a mapping for the (ip_dst, port) pair: */
-  
+    /* Drop packet if it's not ICMP of TCP. */
+    if (ip_hdr->ip_p != IP_PROTOCOL_ICMP && ip_hdr->ip_p != IP_PROTOCOL_TCP) {
+      return;
+    }
+ 
     /* Rewrite packet. */
     ip_hdr->ip_dst = htonl(mapping_match->ip_int);
     ip_hdr->ip_sum = 0x0000;
@@ -366,39 +373,101 @@ handle_nat_ip_packet (struct sr_instance* sr,
       icmp_hdr->icmp_sum = icmp_cksum(icmp_hdr, ip_hdr);
     }
 
-    /* Forward packet, or queue it if not ARP entry. */
+    /* Forward packet, or queue it if no ARP entry is returned. */
     struct sr_if* if_match; 
-    struct sr_arpentry* cache_entry = sr_arpcache_lookup(&(sr->cache), ntohl(ip_hdr->ip_dst));
+    struct sr_arpentry* cache_entry = sr_arpcache_lookup(&(sr->cache), ip_hdr->ip_dst);
     if (cache_entry != NULL) { /* Found a match in the ARP cache to forward packet. */
       sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)packet;
-      struct sr_if* if_match = sr_get_interface(sr, "eth1");
+      struct sr_if* if_match = sr_get_interface(sr, internal_iface);
       memcpy(eth_hdr->ether_dhost, cache_entry->mac, ETHER_ADDR_LEN);
       memcpy(eth_hdr->ether_shost, if_match->addr, ETHER_ADDR_LEN);
-      sr_send_packet(sr, packet, len, "eth1");
+      sr_send_packet(sr, packet, len, internal_iface);
       free(cache_entry);
     } else { /* No match in ARP cache --> queue packet. */
-      sr_arpcache_queuereq(&(sr->cache), ntohl(ip_hdr->ip_dst), packet, len, "eth1", interface);
+      sr_arpcache_queuereq(&(sr->cache), ntohl(ip_hdr->ip_dst), packet, len, internal_iface, interface);
     }
     free(mapping_match);
     return;
-  } 
+  } /* End of case when the packet's destination IP is one of the router's IP's. */
 
   /* Case: packet's destination IP is not one of the router's IP's. */
-  // If no LPM fails --> ICMP net unreachable.
-  // Else
-    // If incoming iface is "eth1"
-      // If outgoing iface is "eth1" --> drop.
-      // Else
-	// If not mapped --> create mapping
-	// Rewrite headers
-	// If ARP exists --> send
-	// Else --> queue packet 
-    // If incoming iface is NOT "eth1" (note that it's also the case that dst IP is not router's)
-      // If outgoing iface is "eth1" --> drop
-      // Else --> forward like router.
+  struct sr_rt* rt_match = NULL;  
 
+  /* Case: no matching entry in our routing table --> send ICMP NET UNREACHABLE */
+  if (!lpm_found_match(ip_hdr->ip_dst, sr, &rt_match)) {
+    struct sr_if* iface = sr_get_interface(sr, interface);
+    enum icmp_responses response;
+    unsigned int icmp_packet_len = sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_icmp_t3_hdr_t);
+    uint8_t icmp_packet[icmp_packet_len];
+    response = DESTINATION_NET_UNREACHABLE;
+    make_icmp_packet(packet, icmp_packet, iface, response);
+    sr_send_packet(sr, icmp_packet, icmp_packet_len, interface);
+    return;
+  }
+
+  /* Case: found a match in our routing table. */
+  /* Now check that the packet came from an internal source. */
+  if (strcmp(interface, internal_iface) == 0) {
+   
+    /* Just to be safe, don't forward (i.e. drop)the packet if the outgoing interface is also the internal
+       interface. Shouldn't happen though. */
+    if (strcmp(rt_match->interface, internal_iface) == 0) {
+      return;
+    }
+    /* Now we know that the packet is originating from an internal source and destined for an external
+       destination. */
+    struct sr_nat_mapping* i_mapping_match = NULL;
+    sr_tcp_hdr_t* tcp_hdr = (sr_tcp_hdr_t*) ((uint8_t*)ip_hdr + sizeof(sr_ip_hdr_t));
+    sr_icmp_hdr_t* icmp_hdr = (sr_icmp_hdr_t*) ((uint8_t*)ip_hdr + sizeof(sr_ip_hdr_t));
+    if (!internal_mapping_exists(sr, packet, &i_mapping_match)) { /* No mapping --> create one. */
+      sr_nat_mapping_type type;
+      uint16_t aux_int;
+      if (ip_hdr->ip_p == IP_PROTOCOL_ICMP) {
+ 	type = nat_mapping_icmp;
+	aux_int = ntohs(tcp_hdr->tcp_src_port);
+      } else if (ip_hdr->ip_p == IP_PROTOCOL_TCP) {
+	type = nat_mapping_tcp;
+	aux_int = ntohs(*(uint16_t*)((uint8_t*)icmp_hdr+sizeof(sr_icmp_hdr_t)));
+      }
+      i_mapping_match = sr_nat_insert_mapping(&(sr->nat), ntohl(ip_hdr->ip_src), aux_int, type); 
+    }
+    /* Rewrite headers: */
+    struct sr_if* ext_iface = sr_get_interface(sr, "eth2"); /* Always use eth2's IP regardless of actual outgoing iface. */
+    ip_hdr->ip_src = htonl(ext_iface->ip);
+    ip_hdr->ip_sum = 0x0000;
+    ip_hdr->ip_sum = cksum(ip_hdr, sizeof(sr_ip_hdr_t));
+    if (i_mapping_match->type == nat_mapping_tcp) {
+      tcp_hdr->tcp_src_port = htons(i_mapping_match->aux_ext);
+      tcp_hdr->tcp_cksum = tcp_cksum(tcp_hdr, ip_hdr);
+    } else if (i_mapping_match->type == nat_mapping_icmp) {
+      uint8_t* new_aux_ptr =  (uint8_t*)icmp_hdr+sizeof(sr_icmp_hdr_t);
+      *(uint16_t*)new_aux_ptr = htons(i_mapping_match->aux_ext);
+      icmp_hdr->icmp_sum = icmp_cksum(icmp_hdr, ip_hdr);
+    }
+    /* Forward packet, or queue it if no ARP entry is returned. */
+    struct sr_arpentry* cache_entry = sr_arpcache_lookup(&(sr->cache), ip_hdr->ip_dst);
+    struct sr_if* if_match;
+    if (cache_entry != NULL) { /* Found a match in the ARP cache to forward packet. */
+      sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)packet;
+      if_match = sr_get_interface(sr, rt_match->interface);
+      memcpy(eth_hdr->ether_dhost, cache_entry->mac, ETHER_ADDR_LEN);
+      memcpy(eth_hdr->ether_shost, if_match->addr, ETHER_ADDR_LEN);
+      sr_send_packet(sr, packet, len, if_match->name);
+      free(cache_entry);
+    } else { /* No match in ARP cache --> queue packet. */
+      sr_arpcache_queuereq(&(sr->cache), ntohl(ip_hdr->ip_dst), packet, len, if_match->name, interface);
+    }
+    free(i_mapping_match);
+    return;
+  } /* End of case when incoming interface is the internal interface. */
+  
+  /* Case: Incoming iface is NOT "eth1" (note that it's also the case that dst IP is not the router's). */
+    // If outgoing iface is "eth1" --> drop
+    // Else --> forward like router.
+  forward_packet(sr, packet, len, interface);
 } /* end of handle_nat_ip_packet(). */ 
 
+/* Zeros the tcp header's checksum field and computes the checksum and returns it. */ 
 uint16_t
 tcp_cksum(sr_tcp_hdr_t* tcp_hdr, sr_ip_hdr_t* ip_hdr) {
   tcp_hdr->tcp_cksum = 0x0000;
@@ -416,6 +485,7 @@ tcp_cksum(sr_tcp_hdr_t* tcp_hdr, sr_ip_hdr_t* ip_hdr) {
   return checksum;
 }
 
+/* Zerso the ICMP header's checksum field and computes the checksum and returns it. */
 uint16_t
 icmp_cksum(sr_icmp_hdr_t* icmp_hdr, sr_ip_hdr_t* ip_hdr) {
   icmp_hdr->icmp_sum = 0x0000;
@@ -587,8 +657,8 @@ bool packet_is_for_me(uint32_t dst_ip, struct sr_instance *sr, struct sr_if** ma
   return false;
 }
 
-/* Implements LPM. Needs to be cleaned up and changed so that it also saves a pointer
-   to the correct routing table entry to be used. */
+/* Implements LPM. Returns true if there's a match and points the variable "match" to it. 
+   Note: takes hdr_ip_addr in network endianness. */
 bool lpm_found_match(uint32_t hdr_ip_addr, struct sr_instance *sr, struct sr_rt** match) {
   uint32_t length = 0;
   struct sr_rt* rt_crawler = sr->routing_table;

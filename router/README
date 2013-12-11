@@ -3,8 +3,24 @@ SUID: khaled
 Implementation Description:
 If (packet has invalid length)
   drop it
-If (packet is IP)
- if (ip header checksum matches)
+If (packet is ARP)
+  if (packet is for me && it's an ARP request)
+    send ARP reply
+  else if (packet is for me && it's an ARP reply)
+    insert reply in ARP cache
+    if (there are outstanding packets)
+      send them
+  else 
+    drop packet
+
+Else if (packet is IP)
+  If (ip header checksum doesn't match)
+    drop packet
+
+  If in NAT mode
+    call handle_nat_ip_packet()
+
+  Else //Proceed like in lab1
     if (packet if for me)
       if (packet is ICMP ECHO request)
         send ECHO reply
@@ -20,22 +36,51 @@ If (packet is IP)
 	  queue packet until ARP response comes.
       else 
 	send DESTINATION NET UNREACHABLE
-  else 
-    drop packet.
-   
-else if (packet is ARP)
-  if (packet is for me && it's an ARP request)
-    send ARP reply
-  else if (packet is for me && it's an ARP reply)
-    insert reply in ARP cache
-    if (there are outstanding packets)
-      send them
-  else 
-    drop packet
 else
   drop packet.
 
-Note: handle packet behaves exactly like the pseudocode in sr_arpcache.h
+------------------------------------
+
+handle_nat_ip_packt() implementation details:
+
+// Note we already know that the packet is IP and checked the packet length and IP checksum.
+
+If packet for me // ip_dst is one of the router's IPs
+  If not mapped // Then assume packet is addressed to NAT
+    If Echo Request
+      reply
+    else if UDP or TCP
+      send Port Unreachable
+    else 
+      drop
+  Else // i.e. found mapping
+    If not TCP & not ICMP
+      drop
+
+    If unsolicited SYN
+      wait 6 seconds
+    Rewrite headers
+    If (found match in ARP cache)
+      forward packet
+    else 
+      queue packet  
+   
+ 
+Else // ip_dst didn't match any of the router's IP's
+  If LPM fails
+    send ICMP Net Unreachable
+  
+  If incoming interface is "eth1" // i.e. internal packet.
+    If outgoing iface is not "eth1" 
+      If not mapped
+        create mapping
+      Rewrite headers
+      If cached ARP exists  
+	send packet
+      Else 
+	queue packet
+
+-----------------------------------------------
 
 Testing:
 Tested traceroutes from one of the HTTP servers to any of my routers interfaces --> ICMP port unreachable seems to work.

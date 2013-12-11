@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+
 int sr_nat_init(struct sr_nat *nat) { /* Initializes the nat */
 
   assert(nat);
@@ -27,7 +28,9 @@ int sr_nat_init(struct sr_nat *nat) { /* Initializes the nat */
 
   nat->mappings = NULL;
   /* Initialize any variables here */
-
+  nat->port = 0x0400; 
+  nat->identifier = 0x0000;
+  
   return success;
 }
 
@@ -124,8 +127,26 @@ struct sr_nat_mapping *sr_nat_insert_mapping(struct sr_nat *nat,
   pthread_mutex_lock(&(nat->lock));
 
   /* handle insert here, create a mapping, and then return a copy of it */
-  struct sr_nat_mapping *mapping = NULL;
+  struct sr_nat_mapping* mapping = (struct sr_nat_mapping*) malloc(sizeof(struct sr_nat_mapping));;
+  mapping->type = type;
+  mapping->ip_int = ip_int; /* internal ip addr */
+  mapping->aux_int = aux_int; /* external ip addr */
+  mapping->last_updated = time(NULL); /* use to timeout mappings */
+  struct sr_nat_connection *conns; /* list of connections. null for ICMP */
+  struct sr_nat_mapping *next;
+  if (type == nat_mapping_tcp) {
+    mapping->aux_ext = nat->port;
+    nat->port++;  
+  } else if (type == nat_mapping_icmp) {
+    mapping->aux_ext = nat->identifier;
+    nat->identifier++;
+  }
+  struct sr_nat_mapping* old = nat->mappings;
+  nat->mappings = mapping;
+  mapping->next = old;
+  struct sr_nat_mapping* copy = malloc(sizeof(struct sr_nat_mapping));
+  memcpy(copy, mapping, sizeof(struct sr_nat_mapping));
 
   pthread_mutex_unlock(&(nat->lock));
-  return mapping;
+  return copy;
 }

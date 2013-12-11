@@ -67,10 +67,12 @@ int main(int argc, char **argv)
     char *logfile = 0;
     struct sr_instance sr;
     sr.in_nat_mode = 0; // By default not in NAT mode, unless flag is specified.	    
-
+    sr.icmp_timeout = 60;
+    sr.tcp_idle_timeout = 7440;
+    sr.tcp_transit_timeout = 300;
     printf("Using %s\n", VERSION_INFO);
 
-    while ((c = getopt(argc, argv, "hs:v:p:u:t:r:l:T:n::")) != EOF)
+    while ((c = getopt(argc, argv, "hs:v:p:u:t:r:l:T:I:E:R:n::")) != EOF)
     {
         switch (c)
         {
@@ -104,6 +106,15 @@ int main(int argc, char **argv)
                 break;
 	    case 'n':
 		sr.in_nat_mode = 1;
+		break;
+	    case 'I':
+		sr.icmp_timeout = atoi((char *) optarg);
+		break;
+	    case 'E':
+		sr.tcp_idle_timeout = atoi((char *) optarg);
+		break;
+	    case 'R':
+		sr.tcp_transit_timeout = atoi((char *) optarg);
 		break;
         } /* switch */
     } /* -- while -- */

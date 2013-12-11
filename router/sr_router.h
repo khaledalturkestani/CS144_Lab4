@@ -45,6 +45,10 @@ struct sr_rt;
 struct sr_instance
 {
     int in_nat_mode; /* 1 (i.e. true if we're in NAT mode. */ 
+    int icmp_timeout; 
+    int tcp_idle_timeout;
+    int tcp_transit_timeout;
+
     int  sockfd;   /* socket to server */
     char user[32]; /* user name */
     char host[32]; /* host name */ 
