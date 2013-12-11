@@ -184,6 +184,42 @@ struct sr_arp_hdr
 } __attribute__ ((packed)) ;
 typedef struct sr_arp_hdr sr_arp_hdr_t;
 
+/* Borrowed from http://www.eg.bucknell.edu/~cs363/2013-spring/code/tcp.h (not exactly). */
+struct sr_tcp_hdr
+{
+  unsigned short tcp_src_port;
+  unsigned short tcp_dst_port;
+  uint32_t tcp_seqno;
+  uint32_t tcp_ackno;
+#  if __BYTE_ORDER == __LITTLE_ENDIAN
+  uint8_t tcp_unused:4;			/* (unused) */
+  uint8_t tcp_off:4;			/* data offset */
+#  endif
+#  if __BYTE_ORDER == __BIG_ENDIAN
+  uint8_t tcp_off:4;			/* data offset */
+  uint8_t tcp_unused:4;			/* (unused) */
+#  endif
+  uint8_t tcp_flags;
+#  define TCP_FIN	0x01
+#  define TCP_SYN	0x02
+#  define TCP_RST	0x04
+#  define TCP_PUSH	0x08
+#  define TCP_ACK	0x10
+#  define TCP_URG	0x20
+  unsigned short tcp_win;		/* window */
+  unsigned short tcp_cksum;		/* checksum */
+  unsigned short tcp_urg_ptr;		/* urgent pointer */
+} __attribute__ ((packed)) ;
+typedef struct sr_tcp_hdr sr_tcp_hdr_t;
+
+struct tcp_pseudo_hdr {
+   uint32_t ip_src; 
+   uint32_t ip_dst;; 
+   uint8_t zero; 
+   uint8_t ptcl; 
+   uint16_t len; 
+} __attribute__ ((packed));
+
 #define sr_IFACE_NAMELEN 32
 
 #endif /* -- SR_PROTOCOL_H -- */

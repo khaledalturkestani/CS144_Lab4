@@ -14,6 +14,10 @@
 #include "sr_protocol.h"
 
 
+void handle_arpreq(struct sr_instance* sr, struct sr_arpreq* req);
+void send_icmp_host_unreachable(struct sr_instance* sr, struct sr_arpreq* req);
+void send_arp_request(struct sr_instance* sr, struct sr_arpreq* req);
+
 
 /* 
   This function gets called every second. For each request sent out, we keep
