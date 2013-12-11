@@ -85,6 +85,7 @@ void send_arp_request(struct sr_instance* sr, struct sr_arpreq* req) {
   struct sr_rt* rt_match = NULL;
   lpm_found_match(req->ip, sr, &rt_match);
   uint32_t next_hop_ip = rt_match->gw.s_addr;
+  print_hdrs(req->packets->buf, req->packets->len);
   printf("Sending ARP request. Interface: %s\n", my_iface->name); 
   /* Fill in Ethernet header. */
   memcpy(eth_hdr->ether_shost, my_iface->addr, ETHER_ADDR_LEN);
@@ -149,6 +150,8 @@ struct sr_arpreq *sr_arpcache_queuereq(struct sr_arpcache *cache,
 {
     pthread_mutex_lock(&(cache->lock));
     
+    printf("In sr_arpcache_queuereq\n");
+
     struct sr_arpreq *req;
     for (req = cache->requests; req != NULL; req = req->next) {
         if (req->ip == ip) {

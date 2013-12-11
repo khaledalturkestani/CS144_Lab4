@@ -184,6 +184,7 @@ forward_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* 
         sr_send_packet(sr, packet, len, rt_match->interface);
         free(cache_entry);
       } else { /* No match in ARP cache --> queue packet. */
+	printf("1st queue\n");
         sr_arpcache_queuereq(&(sr->cache), rt_match->gw.s_addr, packet, len, rt_match->interface, interface);
       }
     } else { /* No match in routing table --> send ICMP net unreachable. */
@@ -384,7 +385,8 @@ handle_nat_ip_packet (struct sr_instance* sr,
       sr_send_packet(sr, packet, len, internal_iface);
       free(cache_entry);
     } else { /* No match in ARP cache --> queue packet. */
-      sr_arpcache_queuereq(&(sr->cache), ntohl(ip_hdr->ip_dst), packet, len, internal_iface, interface);
+	printf("2nd call\n");
+      sr_arpcache_queuereq(&(sr->cache), ip_hdr->ip_dst, packet, len, internal_iface, interface);
     }
     free(mapping_match);
     return;
@@ -446,16 +448,16 @@ handle_nat_ip_packet (struct sr_instance* sr,
     }
     /* Forward packet, or queue it if no ARP entry is returned. */
     struct sr_arpentry* cache_entry = sr_arpcache_lookup(&(sr->cache), ip_hdr->ip_dst);
-    struct sr_if* if_match;
+    struct sr_if* if_match = sr_get_interface(sr, rt_match->interface);;
     if (cache_entry != NULL) { /* Found a match in the ARP cache to forward packet. */
       sr_ethernet_hdr_t* eth_hdr = (sr_ethernet_hdr_t*)packet;
-      if_match = sr_get_interface(sr, rt_match->interface);
       memcpy(eth_hdr->ether_dhost, cache_entry->mac, ETHER_ADDR_LEN);
       memcpy(eth_hdr->ether_shost, if_match->addr, ETHER_ADDR_LEN);
       sr_send_packet(sr, packet, len, if_match->name);
       free(cache_entry);
     } else { /* No match in ARP cache --> queue packet. */
-      sr_arpcache_queuereq(&(sr->cache), ntohl(ip_hdr->ip_dst), packet, len, if_match->name, interface);
+	printf("3rd call\n");
+      sr_arpcache_queuereq(&(sr->cache), ip_hdr->ip_dst, packet, len, if_match->name, interface);
     }
     free(i_mapping_match);
     return;
