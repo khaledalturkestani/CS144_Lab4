@@ -81,19 +81,24 @@ Else // ip_dst didn't match any of the router's IP's
 	queue packet
 
 -----------------------------------------------
-
 Testing:
+
+Tests with/without the -n flag:
+
 Tested traceroutes from one of the HTTP servers to any of my routers interfaces --> ICMP port unreachable seems to work.
 Tested traceroutes from one server to another --> TTL Time Exceeded and Port Unreachable work.
 Tested using a get request from a web brwoser to one of the servers --> ARP caching works. 
-Tested by modifying the mask for eth3 to be 255.255.255.255 and performing a GET request fro mthe browser to one of the 
+Tested by modifying the mask for eth3 to be 255.255.255.255 and performing a GET request from the browser to one of the 
 servers. --> Router correctly generated Destination Net Unreachable.
 Tested by sending ARP requests through the wrong interface --> Destination Host Unreachable seems to work.
+Pinging one of the servers from a myth machine and then examining the tcpdump output to the check the ICMP Echo request mappings are working are passing.
 
+-----------------------------------------------
 Challenging part:
-Most challenging part was keeping track of the interface that the packet should be sent through
-in different scenarios and maintaining the interface somewhere in memory. 
 
+The most challenging part for me was trying to implement TCP states. I think this was becuase I couldn't come up with a simple set of flags to describe the different states in time. Also, this time keeping track of endianness of fields was a much bigger headache for me, but I can't tell what is different. It might be that I got lazy initially and didn't think thoroughly about being consistent and about what values and functions should be big endian and what should be little endian. Finally, modularizing the code so that it would change the topology from a router to a NAT was very challenging for me. Even though I thought my final solution wasn't bad, I still can't see there could be a clean solution that changes behavior depending on the flag. 
+
+----------------------------------------------
 Bugs:
-I think my code meets the assignment requirements.
 
+- Didn't implement TCP timeouts. More specifically, I think I implemented checking whether or not a connection should be removed from a mapping. I didn't implement the functionality for updating last_updated values for TCP connection as I wasn't keeping track of the different connection statest properly. 

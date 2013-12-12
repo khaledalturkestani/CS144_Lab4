@@ -75,6 +75,9 @@ void sr_init(struct sr_instance* sr)
     /* Add initialization code here! */
     if (sr->in_nat_mode) {
       sr_nat_init(&(sr->nat));
+      sr->nat.icmp_timeout = sr->icmp_timeout;
+      sr->nat.tcp_idle_timeout = sr->tcp_idle_timeout;
+      sr->nat.tcp_transit_timeout = sr->tcp_transit_timeout;
     }
 } /* -- sr_init -- */
 
@@ -122,7 +125,6 @@ void sr_handlepacket(struct sr_instance* sr,
 
   /* Handling IP packets. */
   if (ether_type == ethertype_ip) { /* Packet is IP. */
-    printf("Packet is IP\n");
     unsigned int eth_hdr_len = sizeof(sr_ethernet_hdr_t);
     sr_ip_hdr_t* ip_hdr = (sr_ip_hdr_t*)(packet+eth_hdr_len);
  
@@ -136,8 +138,6 @@ void sr_handlepacket(struct sr_instance* sr,
       handle_nat_ip_packet(sr, packet, len, interface);
       return;
     }
-
-    printf("Passed checksum check\n");
 
     /* We're not in NAT mode --> Handle IP packet normally (i.e. like in lab1). */
     struct sr_if* iface = sr_get_interface(sr, interface);
@@ -184,11 +184,9 @@ forward_packet(struct sr_instance* sr, uint8_t* packet, unsigned int len, char* 
         sr_send_packet(sr, packet, len, rt_match->interface);
         free(cache_entry);
       } else { /* No match in ARP cache --> queue packet. */
-	printf("1st queue\n");
         sr_arpcache_queuereq(&(sr->cache), rt_match->gw.s_addr, packet, len, rt_match->interface, interface);
       }
     } else { /* No match in routing table --> send ICMP net unreachable. */
-      printf("------------------- NOT MATCH IN ROUTING TABLE -------------------\n");
       icmp_packet_len = sizeof(sr_ethernet_hdr_t)+sizeof(sr_ip_hdr_t)+sizeof(sr_icmp_t3_hdr_t);
       uint8_t icmp_packet[icmp_packet_len];
       response = DESTINATION_NET_UNREACHABLE;
@@ -236,7 +234,6 @@ handle_ip_pkt_for_router(struct sr_instance* sr, uint8_t* packet, unsigned int l
     if (icmp_hdr->icmp_type != 0x08) { /* ICMP is not an echo request -> drop packet. */
       return;
     }
-    printf("Packet is ICMP echo request\n");
     icmp_packet_len = ntohs(ip_hdr->ip_len)+(sizeof(sr_ethernet_hdr_t));
     uint8_t icmp_packet[icmp_packet_len];
     response = ECHO_REPLY;
@@ -328,7 +325,6 @@ handle_nat_ip_packet (struct sr_instance* sr,
         	      unsigned int len,
         	      char* interface/* lent */)
 {
-  printf("In NAT mode!!\n");
   /* Note that we've already established that the packet is an IP packet and that it passed 
      the length & checksum checks. */
   
@@ -385,7 +381,6 @@ handle_nat_ip_packet (struct sr_instance* sr,
       sr_send_packet(sr, packet, len, internal_iface);
       free(cache_entry);
     } else { /* No match in ARP cache --> queue packet. */
-	printf("2nd call\n");
       sr_arpcache_queuereq(&(sr->cache), ip_hdr->ip_dst, packet, len, internal_iface, interface);
     }
     free(mapping_match);
@@ -456,7 +451,6 @@ handle_nat_ip_packet (struct sr_instance* sr,
       sr_send_packet(sr, packet, len, if_match->name);
       free(cache_entry);
     } else { /* No match in ARP cache --> queue packet. */
-	printf("3rd call\n");
       sr_arpcache_queuereq(&(sr->cache), ip_hdr->ip_dst, packet, len, if_match->name, interface);
     }
     free(i_mapping_match);

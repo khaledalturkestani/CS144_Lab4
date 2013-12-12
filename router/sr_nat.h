@@ -14,8 +14,13 @@ typedef enum {
 
 struct sr_nat_connection {
   /* add TCP connection state data members here */
-
-  struct sr_nat_connection *next;
+  uint32_t ip;		/* External destination. In computer endianness. */
+  uint32_t port;	/* External destination. In computer endianness. */
+  int syn;
+  int syn_ack;
+  int conn_established; /* True if the connection is established. False if in transitory state. */
+  time_t last_updated;  /* Used for both timeouts (tranit & idle). */
+  struct sr_nat_connection *next;  
 };
 
 struct sr_nat_mapping {
@@ -34,6 +39,10 @@ struct sr_nat {
   struct sr_nat_mapping *mappings;
   uint16_t port; /* In computer endianness. */
   uint16_t identifier; /* In computer endianness. */  
+
+  int icmp_timeout; 
+  int tcp_idle_timeout;
+  int tcp_transit_timeout;
 
   /* threading */
   pthread_mutex_t lock;

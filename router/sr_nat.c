@@ -28,6 +28,8 @@ int sr_nat_init(struct sr_nat *nat) { /* Initializes the nat */
 
   nat->mappings = NULL;
   /* Initialize any variables here */
+
+  /* Global values: */
   nat->port = 0x0400; 
   nat->identifier = 0x0000;
   
@@ -56,6 +58,57 @@ void *sr_nat_timeout(void *nat_ptr) {  /* Periodic Timout handling */
     time_t curtime = time(NULL);
 
     /* handle periodic tasks here */
+    struct sr_nat_mapping* prev = nat->mappings;
+    struct sr_nat_mapping* mapping = nat->mappings;
+    int end_of_mappings = 0;
+    while (mapping != NULL) {
+      mapping = mapping->next;
+      if (mapping == NULL) {
+	mapping = prev;
+	end_of_mappings = 1;
+      }
+      if (mapping->type == nat_mapping_icmp) {
+	if (difftime(curtime, mapping->last_updated) > nat->icmp_timeout) {
+	  struct sr_nat_mapping* to_free = mapping;
+	  mapping = mapping->next;
+	  free(to_free);
+	  prev->next = mapping;
+	  continue;
+	} 
+      } else {
+	struct sr_nat_connection* prev_conn = mapping->conns;
+	struct sr_nat_connection* conn = mapping->conns;
+	while (conn != NULL) {
+	  conn = conn->next;
+	  if (conn == NULL) {
+	    conn = prev_conn;
+	  }
+	  time_t timeout_value;
+	  if (conn->conn_established) {
+	    timeout_value = nat->tcp_idle_timeout;
+	  } else {
+	    timeout_value = nat->tcp_transit_timeout;
+	  }
+	  if (difftime(curtime, conn->last_updated) > timeout_value) {
+	    struct sr_nat_connection* to_free = conn;
+	    conn = conn->next;
+	    free(to_free);
+	    prev_conn->next = conn;
+	    continue;
+	  }
+	  prev_conn = prev_conn->next;
+	}
+	if (mapping->conns == NULL) { /* Cleared out all connections for mapping. */
+	  struct sr_nat_mapping* to_free = mapping;
+          mapping = mapping->next;
+          free(to_free);
+          prev->next = mapping;
+          continue;
+	}
+      }
+      if (end_of_mappings) mapping = NULL; // End the loop
+      prev = prev->next;
+    }
 
     pthread_mutex_unlock(&(nat->lock));
   }
@@ -81,6 +134,10 @@ struct sr_nat_mapping *sr_nat_lookup_external(struct sr_nat *nat,
     if (aux_ext == mapping->aux_ext) {
       copy = (struct sr_nat_mapping*)malloc(sizeof(struct sr_nat_mapping));
       memcpy(copy, mapping, sizeof(struct sr_nat_mapping));
+      /* Note: For a TCP connection, the function doesn't update the last_updated field. */
+      if (type == nat_mapping_icmp) {
+        mapping->last_updated = time(NULL);
+      } 
       break;
     }
     mapping = mapping->next;
@@ -109,6 +166,10 @@ struct sr_nat_mapping *sr_nat_lookup_internal(struct sr_nat *nat,
     if (aux_int == mapping->aux_int && ip_int == mapping->ip_int) {
       copy = (struct sr_nat_mapping*)malloc(sizeof(struct sr_nat_mapping));
       memcpy(copy, mapping, sizeof(struct sr_nat_mapping));
+      /* Note: For a TCP connection, the function doesn't update the last_updated field. */
+      if (type == nat_mapping_icmp) {
+        mapping->last_updated = time(NULL);
+      }
       break;
     }
     mapping = mapping->next;
@@ -135,15 +196,18 @@ struct sr_nat_mapping *sr_nat_insert_mapping(struct sr_nat *nat,
   struct sr_nat_connection *conns; /* list of connections. null for ICMP */
   struct sr_nat_mapping *next;
   if (type == nat_mapping_tcp) {
+    mapping->conns = (struct sr_nat_connection*) malloc(sizeof(struct sr_nat_connection));
     mapping->aux_ext = nat->port;
     nat->port++;  
   } else if (type == nat_mapping_icmp) {
+    mapping->conns = NULL;
     mapping->aux_ext = nat->identifier;
     nat->identifier++;
   }
-  struct sr_nat_mapping* old = nat->mappings;
+  //struct sr_nat_mapping* old = nat->mappings;
+  mapping->next = nat->mappings;
   nat->mappings = mapping;
-  mapping->next = old;
+  //mapping->next = old;
   struct sr_nat_mapping* copy = malloc(sizeof(struct sr_nat_mapping));
   memcpy(copy, mapping, sizeof(struct sr_nat_mapping));
 
